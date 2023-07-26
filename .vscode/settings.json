@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "elf.h": "c",
+        "limits.h": "c",
+        "dlfcn.h": "c"
+    }
+}
