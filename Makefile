@@ -9,7 +9,7 @@ all: $(OUT)
 $(OUT): $(SRC)
 	$(CC) $(CFLAGS) -o $(OUT) $(SRC)
 
-debug: CFLAGS += -gcc
+debug: CFLAGS += -g
 debug: $(OUT)
 
 clean:
