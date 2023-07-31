@@ -1,16 +1,20 @@
 CC := gcc
-CFLAGS := -ldl -Wall -Wextra
+CFLAGS := -Wall -Wextra -std=c11
+LDFLAGS :=
 
-SRC := ldd-ish.c
-OUT := ldd-ish
+SOURCES := graph.c ldd-ish.c
+OBJECTS := $(SOURCES:.c=.o)
+EXECUTABLE := ldd-ish
 
-all: $(OUT)
+.PHONY: all clean
 
-$(OUT): $(SRC)
-	$(CC) $(CFLAGS) -o $(OUT) $(SRC)
+all: $(EXECUTABLE)
 
-debug: CFLAGS += -g
-debug: $(OUT)
+$(EXECUTABLE): $(OBJECTS)
+	$(CC) $(LDFLAGS) $^ -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OUT)
+	rm -f $(OBJECTS) $(EXECUTABLE)

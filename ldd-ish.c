@@ -9,13 +9,15 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <link.h>
+#include "graph.h"
 
 void start_scan(char *prog_name);
+char* string_table_lookup(char *str_tab, size_t str_idx);
+static int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data);
+void scan_phdr(Elf64_Phdr *phdr, size_t phnum, Elf64_Addr base_addr);
 void print_ehdr_info(Elf64_Ehdr elfh);
 void print_shdr_table(Elf64_Shdr *shdr_tab, size_t hdr_num, char *shstrtab);
-char* string_table_lookup(char *str_tab, size_t str_idx);
 void print_dyn_table(Elf64_Dyn *dyntab);
-static int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data);
 
 int dl_exe_name_skipped = 0;
 
@@ -29,78 +31,6 @@ int main(int argc, char **argv){
         perror("No argument passed");
         exit(1);
     }
-}
-
-void print_ehdr_info(Elf64_Ehdr elfh) {
-    printf("ELFH: Type-> %x\n", elfh.e_type);
-    printf("ELFH: Header Size-> %x\n", elfh.e_ehsize);
-    printf("ELFH: PHDR Table Offset-> %lx\n", elfh.e_phoff);
-    printf("ELFH: PHDR Num->%d\n", elfh.e_phnum);
-    printf("ELFH: PHDR Size-> %x\n", elfh.e_phentsize);
-    printf("ELFH: SHDR Table Offset-> %lx\n", elfh.e_shoff);
-    printf("ELFH: SHDR Num-> %d\n", elfh.e_shnum);
-    printf("ELFH: SHDR Size-> %x\n", elfh.e_shentsize);
-    printf("ELFH: SHDR Str Table Index-> %d\n", elfh.e_shstrndx);
-    return;
-}
-
-void print_shdr_table(Elf64_Shdr *shdr_tab, size_t hdr_count, char *shstrtab) {
-    for (size_t i = 0; i < hdr_count; i++)
-    {
-        printf("Section Header #: %ld\n", i);
-        printf("%s\n", string_table_lookup(shstrtab,shdr_tab[i].sh_name));
-        printf("Section Header Type: %x\n", shdr_tab[i].sh_type);
-        printf("Section Header Size: %lx\n", shdr_tab[i].sh_size);
-        printf("Section Header Entry Size: %ld\n", shdr_tab[i].sh_entsize);
-    }
-    return;
-}
-
-void print_dyn_table(Elf64_Dyn *dyntab) {
-    size_t i = 0;
-    while(dyntab[i].d_tag != DT_NULL)
-    {
-        printf("Dynamic Entry #: %ld\n", i);
-        printf("Dynamic Entry Type: %lx\n", dyntab[i].d_tag);
-        printf("Dynamic Entry Val: %lx\n", dyntab[i].d_un.d_val);
-        printf("Dynamic Entry Ptr: %ld\n", dyntab[i].d_un.d_ptr);
-        i++;
-    }
-    return;
-}
-
-char* string_table_lookup(char *str_tab, size_t str_idx) {
-    size_t bufsize = 16;
-    char *strbuf = malloc(bufsize);
-    int i = 0;
-    while (str_tab[str_idx] != '\0') {
-        if (i >= bufsize) {
-            bufsize *= 2; // Double the buffer size
-            strbuf = (char*)realloc(strbuf, bufsize);
-            if (!strbuf) {
-                perror("Memory reallocation failed");
-                exit(1);
-            }
-        }
-
-        // Copy the character to readString
-        strbuf[i] = str_tab[str_idx];
-        str_idx++;
-        i++;
-    }
-    return strbuf;
-}
-
-static int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data) {
-    (void) size;
-    (void) data;
-    if (!dl_exe_name_skipped){
-        dl_exe_name_skipped = 1;
-        return 0;
-    }
-    printf("Shared Object: %s, Base Address: %p\n", info->dlpi_name, (void *)info->dlpi_addr);
-    // printf("0x%016lx\n", (void *)info->dlpi_addr);
-    return 0;
 }
 
 void start_scan(char *prog_name) {
@@ -194,19 +124,114 @@ void start_scan(char *prog_name) {
 				fflush(stdout);
 				exit(1);
 			}
-            // printf("%s\n", libname);
+            printf("EXE needs: %s\n", libname);
             // printf("0x%016lx\n", dlhandle);
             dl_iterate_phdr(dl_phdr_callback, NULL);
             dlclose(dlhandle);
         }
         idx++;
     }
-
+    
     free(shstrtab);
     free(dynstrtab);
     free(shdrtab);
     free(dyntab);
     free(strtab);
     fclose(fp);
+    return;
+}
+
+char *string_table_lookup(char *str_tab, size_t str_idx) {
+
+    size_t str_len = 0;
+    while (str_tab[str_idx + str_len] != '\0') {
+        str_len++;
+    }
+
+    char* strbuf = (char*)malloc(str_len + 1);
+    if (!strbuf) {
+        perror("Memory allocation failed");
+        exit(1);
+    }
+
+    for (size_t i = 0; i < str_len; i++) {
+        strbuf[i] = str_tab[str_idx + i];
+    }
+    strbuf[str_len] = '\0';
+    return strbuf;
+}
+
+static int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data) {
+    (void) size;
+    (void) data;
+
+    if(strlen(info->dlpi_name) == 0) {
+        return 0;
+    }
+
+    printf("Shared Object: %s, Base Address: 0x%016lx\n", info->dlpi_name, (void *)info->dlpi_addr);
+    scan_phdr(info->dlpi_phdr, info->dlpi_phnum, info->dlpi_addr);
+    return 0;
+}
+
+void scan_phdr(Elf64_Phdr *phdr, size_t phnum, Elf64_Addr base_addr) {
+
+    for (int i = 0; i < phnum; i++) {
+        if (phdr[i].p_type == PT_DYNAMIC) {
+            if (phdr[i].p_memsz == 0) {
+                return;
+            }
+            Elf64_Dyn *dyns = (Elf64_Dyn *) (base_addr + phdr[i].p_vaddr);
+            size_t dyn_num = phdr[i].p_memsz / sizeof(Elf64_Dyn);
+            char* dynstrtab;
+            for (int j = 0; j < dyn_num; j++) {
+                if (dyns[j].d_tag == DT_STRTAB) {
+                    dynstrtab = (char*)(dyns[j].d_un.d_val);
+                }
+            }
+            for (int j = 0; j < dyn_num; j++) {
+                if (dyns[j].d_tag == DT_NEEDED) {
+                    printf("needs library: %s\n", (char*)(string_table_lookup(dynstrtab, dyns[j].d_un.d_val)));
+                }
+            }
+        }
+    }
+}
+
+void print_ehdr_info(Elf64_Ehdr elfh) {
+    printf("ELFH: Type-> %x\n", elfh.e_type);
+    printf("ELFH: Header Size-> %x\n", elfh.e_ehsize);
+    printf("ELFH: PHDR Table Offset-> %lx\n", elfh.e_phoff);
+    printf("ELFH: PHDR Num->%d\n", elfh.e_phnum);
+    printf("ELFH: PHDR Size-> %x\n", elfh.e_phentsize);
+    printf("ELFH: SHDR Table Offset-> %lx\n", elfh.e_shoff);
+    printf("ELFH: SHDR Num-> %d\n", elfh.e_shnum);
+    printf("ELFH: SHDR Size-> %x\n", elfh.e_shentsize);
+    printf("ELFH: SHDR Str Table Index-> %d\n", elfh.e_shstrndx);
+    return;
+}
+
+void print_shdr_table(Elf64_Shdr *shdr_tab, size_t hdr_count, char *shstrtab) {
+    for (size_t i = 0; i < hdr_count; i++)
+    {
+        printf("Section Header #: %ld\n", i);
+        printf("%s\n", string_table_lookup(shstrtab,shdr_tab[i].sh_name));
+        printf("Section Header Type: %x\n", shdr_tab[i].sh_type);
+        printf("Section Header Size: %lx\n", shdr_tab[i].sh_size);
+        printf("Section Header Entry Size: %ld\n", shdr_tab[i].sh_entsize);
+    }
+    return;
+}
+
+void print_dyn_table(Elf64_Dyn *dyntab) {
+    size_t i = 0;
+    while(dyntab[i].d_tag != DT_NULL)
+    {
+        printf("Dynamic Entry #: %ld\n", i);
+        printf("Dynamic Entry Type: %lx\n", dyntab[i].d_tag);
+        printf("Dynamic Entry Val: %lx\n", dyntab[i].d_un.d_val);
+        printf("Dynamic Entry Ptr: %ld\n", dyntab[i].d_un.d_ptr);
+        i++;
+    }
     return;
 }
